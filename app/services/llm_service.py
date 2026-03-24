@@ -302,7 +302,17 @@ class LLMService:
         references_block = "\n".join(
             [f"[{ref['id']}] {ref['type']}: {ref['value']}" for ref in citation_registry]
         )
-        must_include = ", ".join(profile["must_include"])
+        must_include_values = profile.get("must_include", [])
+        if isinstance(must_include_values, list):
+            must_include = ", ".join(must_include_values)
+        else:
+            must_include = str(must_include_values)
+        must_exclude_values = profile.get("must_exclude", [])
+        if isinstance(must_exclude_values, list):
+            must_exclude = ", ".join(must_exclude_values)
+        else:
+            must_exclude = str(must_exclude_values)
+        scope_note = profile.get("scope_note", "")
 
         rewrite_constraints = ""
         if attempt > 1:
@@ -315,8 +325,10 @@ class LLMService:
         # Build user prompt from template
         user_prompt = self.draft_user_prompt_template.format(
             section_name=section_name.upper(),
-            section_purpose=profile["purpose"],
+            section_purpose=profile.get("purpose", "Write a technically accurate section based on the provided notes."),
             must_include=must_include,
+            must_exclude=must_exclude,
+            scope_note=scope_note,
             min_words=self.min_words,
             min_citations_required=min_citations_required,
             attempt=attempt,

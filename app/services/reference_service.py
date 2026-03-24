@@ -300,11 +300,11 @@ class ReferenceExtractor:
             response = httpx.post(
                 url,
                 headers={
-                    "Authorization": f"Bearer {self.nvidia_nim_api_key[:20]}...",  # Log partial key for security
+                    "Authorization": f"Bearer {self.nvidia_nim_api_key}", 
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=60.0,
+                timeout=180.0,
             )
             
             if response.status_code != 200:
