@@ -4,6 +4,20 @@ from datetime import datetime
 
 
 class ExportService:
+    def _collect_numeric_references(self, content: Dict[str, Any]) -> list:
+        section_keys = ["hypothesis", "methodology", "findings", "conclusions", "timeline"]
+        merged: Dict[int, Dict[str, Any]] = {}
+
+        for key in section_keys:
+            section_data = content.get(key, {})
+            for ref in section_data.get("citation_registry", []) or []:
+                ref_id = ref.get("id")
+                if not isinstance(ref_id, int):
+                    continue
+                merged[ref_id] = ref
+
+        return [merged[k] for k in sorted(merged.keys())]
+
     def to_markdown(self, report_data: Dict[str, Any]) -> str:
         content = report_data.get("content", {})
         title = report_data.get("title", "Untitled Report")
@@ -17,6 +31,7 @@ class ExportService:
             for section in sections_order:
                 section_data = content.get(section, {})
                 selected_texts = section_data.get("selected_texts", [])
+                draft_text = section_data.get("draft", "")
                 
                 if section == "hypothesis":
                     md += "## Hypothesis\n\n"
@@ -27,7 +42,9 @@ class ExportService:
                 elif section == "conclusions":
                     md += "## Conclusions\n\n"
                 
-                if selected_texts:
+                if draft_text:
+                    md += f"{draft_text}\n\n"
+                elif selected_texts:
                     for text in selected_texts:
                         md += f"{text}\n\n"
                 else:
@@ -36,17 +53,28 @@ class ExportService:
         elif report_type == "timeline":
             timeline_data = content.get("timeline", {})
             selected_texts = timeline_data.get("selected_texts", [])
+            draft_text = timeline_data.get("draft", "")
             
             md += "## Timeline\n\n"
             
-            if selected_texts:
+            if draft_text:
+                md += f"{draft_text}\n\n"
+            elif selected_texts:
                 for i, entry in enumerate(selected_texts, 1):
                     md += f"{i}. {entry}\n\n"
             else:
                 md += "\n\n"
         
+        numeric_refs = self._collect_numeric_references(content)
         references = content.get("references", [])
-        if references:
+        if numeric_refs:
+            md += "---\n\n## References\n\n"
+
+            for ref in numeric_refs:
+                md += f"- [{ref.get('id')}] **{ref.get('type', 'source')}**: {ref.get('value', 'Unknown Source')}\n"
+
+            md += "\n"
+        elif references:
             md += "---\n\n## References\n\n"
             
             for ref in references:
@@ -141,27 +169,55 @@ class ExportService:
             for section in sections_order:
                 section_data = content.get(section, {})
                 selected_texts = section_data.get("selected_texts", [])
+                draft_text = section_data.get("draft", "")
                 
-                if selected_texts:
+                if draft_text or selected_texts:
                     html += f"    <h2>{section_titles.get(section, section.title())}</h2>\n"
                     html += "    <div class='section'>\n"
-                    for text in selected_texts:
-                        html += f"        <p>{text}</p>\n"
+                    if draft_text:
+                        # Split by newlines in case the draft has multiple paragraphs
+                        for p in draft_text.split('\n\n'):
+                            if p.strip():
+                                html += f"        <p>{p.strip()}</p>\n"
+                    else:
+                        for text in selected_texts:
+                            html += f"        <p>{text}</p>\n"
                     html += "    </div>\n"
         
         elif report_type == "timeline":
             timeline_data = content.get("timeline", {})
             selected_texts = timeline_data.get("selected_texts", [])
+            draft_text = timeline_data.get("draft", "")
             
-            if selected_texts:
+            if draft_text or selected_texts:
                 html += "    <h2>Timeline</h2>\n"
-                html += "    <div class='section'>\n        <ul>\n"
-                for entry in selected_texts:
-                    html += f"            <li>{entry}</li>\n"
-                html += "        </ul>\n    </div>\n"
+                html += "    <div class='section'>\n"
+                if draft_text:
+                    for p in draft_text.split('\n\n'):
+                        if p.strip():
+                            html += f"        <p>{p.strip()}</p>\n"
+                else:
+                    html += "        <ul>\n"
+                    for entry in selected_texts:
+                        html += f"            <li>{entry}</li>\n"
+                    html += "        </ul>\n"
+                html += "    </div>\n"
         
+        numeric_refs = self._collect_numeric_references(content)
         references = content.get("references", [])
-        if references:
+        if numeric_refs:
+            html += "    <div class='references'>\n        <h2>References</h2>\n"
+
+            for ref in numeric_refs:
+                html += "        <div class='reference-item'>\n"
+                html += (
+                    f"            <strong>[{ref.get('id')}] {ref.get('type', 'source')}</strong>: "
+                    f"{ref.get('value', 'Unknown Source')}<br>\n"
+                )
+                html += "        </div>\n"
+
+            html += "    </div>\n"
+        elif references:
             html += "    <div class='references'>\n        <h2>References</h2>\n"
             
             for ref in references:
@@ -191,9 +247,18 @@ class ExportService:
         html_content = self.to_html(report_data)
         
         try:
-            from weasyprint import HTML
-            pdf_bytes = HTML(string=html_content).write_pdf()
-            return pdf_bytes
+            from xhtml2pdf import pisa
+            from io import BytesIO
+            
+            result = BytesIO()
+            pisa_status = pisa.CreatePDF(
+                html_content, dest=result
+            )
+            
+            if pisa_status.err:
+                raise Exception("PDF generation failed with errors")
+                
+            return result.getvalue()
         except Exception as e:
             raise Exception(f"PDF generation failed: {str(e)}")
 

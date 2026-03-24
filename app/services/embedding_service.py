@@ -90,6 +90,12 @@ class EmbeddingService:
                 metadatas=metadatas
             )
 
+    def delete_embeddings(self, entry_id: int):
+        existing_ids = self.collection.get()["ids"]
+        entry_ids_to_delete = [id for id in existing_ids if id.startswith(f"entry_{entry_id}_")]
+        if entry_ids_to_delete:
+            self.collection.delete(ids=entry_ids_to_delete)
+
     def semantic_search(self, query: str, entry_ids: List[int], n_results: int = 5) -> List[Dict[str, Any]]:
         if not entry_ids:
             return []

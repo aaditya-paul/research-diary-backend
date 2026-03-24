@@ -7,5 +7,9 @@ pydantic
 pydantic-settings
 python-multipart
 html2text
-weasyprint
+xhtml2pdf
 jinja2
+google-genai
+groq
+httpx
+python-dotenv

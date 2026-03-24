@@ -70,3 +70,38 @@ class ReportResponse(BaseModel):
     content: Dict[str, Any]
     entry_ids: List[int]
     created_at: str
+
+class DraftRegenerateRequest(BaseModel):
+    section_name: str
+    raw_texts: List[str]
+
+class CitationReference(BaseModel):
+    id: int
+    type: str
+    value: str
+    entry_ids: List[int]
+
+
+class DraftQualityMetrics(BaseModel):
+    word_count: int
+    min_words_required: int
+    min_words_passed: bool
+    citation_count: int
+    min_citations_required: int
+    citations_passed: bool
+    structure_passed: bool
+
+
+class DraftDiagnostics(BaseModel):
+    status: str
+    attempts_used: int
+    provider_used: str
+    issues: List[str] = []
+
+
+class DraftRegenerateResponse(BaseModel):
+    draft: str
+    inline_citation_ids: List[int] = []
+    citation_registry: List[CitationReference] = []
+    quality: DraftQualityMetrics
+    diagnostics: DraftDiagnostics

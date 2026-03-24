@@ -7,11 +7,13 @@ from ..models.database import get_db, Entry, Report
 from ..models.schemas import (
     EntryCreate, EntryUpdate, EntryResponse,
     ReportGenerateRequest, ReportGenerateResponse,
-    ReportCreate, ReportResponse
+    ReportCreate, ReportResponse,
+    DraftRegenerateRequest, DraftRegenerateResponse
 )
 from ..services.embedding_service import embedding_service
 from ..services.report_service import report_service
 from ..services.export_service import export_service
+from ..services.llm_service import llm_service
 
 router = APIRouter()
 
@@ -94,6 +96,11 @@ def delete_entry(entry_id: int, db: Session = Depends(get_db)):
     db.delete(entry)
     db.commit()
     
+    try:
+        embedding_service.delete_embeddings(entry_id)
+    except Exception as e:
+        print(f"Failed to delete embeddings for entry {entry_id}: {e}")
+    
     return {"message": "Entry deleted successfully"}
 
 
@@ -105,6 +112,13 @@ def generate_report_suggestions(request: ReportGenerateRequest):
     )
     return result
 
+@router.post("/report/draft/regenerate", response_model=DraftRegenerateResponse)
+async def regenerate_draft_section(request: DraftRegenerateRequest):
+    draft_payload = await llm_service.rephrase_section(
+        section_name=request.section_name,
+        raw_texts=request.raw_texts
+    )
+    return draft_payload
 
 @router.post("/report", response_model=ReportResponse)
 def create_report(report: ReportCreate, db: Session = Depends(get_db)):
