@@ -163,7 +163,7 @@ def export_markdown(report_id: int):
     
     return {
         "content": markdown_content,
-        "filename": f"{report['title'].replace(' ', '_')}.md"
+        "filename": export_service.safe_filename(report.get("title", "Untitled Report"), "md")
     }
 
 
@@ -177,7 +177,7 @@ def export_html(report_id: int):
     
     return {
         "content": html_content,
-        "filename": f"{report['title'].replace(' ', '_')}.html"
+        "filename": export_service.safe_filename(report.get("title", "Untitled Report"), "html")
     }
 
 
@@ -194,7 +194,7 @@ def export_pdf(report_id: int):
         
         return {
             "content": pdf_base64,
-            "filename": f"{report['title'].replace(' ', '_')}.pdf"
+            "filename": export_service.safe_filename(report.get("title", "Untitled Report"), "pdf")
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")

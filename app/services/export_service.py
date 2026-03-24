@@ -1,9 +1,21 @@
 from typing import Dict, Any
 import json
 from datetime import datetime
+from html import escape
+import re
 
 
 class ExportService:
+    def safe_filename(self, title: str, extension: str) -> str:
+        raw = (title or "Untitled Report").strip()
+        # Replace characters that are invalid in common file systems.
+        cleaned = re.sub(r'[<>:"/\\|?*]+', "_", raw)
+        cleaned = re.sub(r"\s+", "_", cleaned)
+        cleaned = cleaned.strip("._")
+        if not cleaned:
+            cleaned = "Untitled_Report"
+        return f"{cleaned}.{extension}"
+
     def _collect_numeric_references(self, content: Dict[str, Any]) -> list:
         section_keys = ["hypothesis", "methodology", "findings", "conclusions", "timeline"]
         merged: Dict[int, Dict[str, Any]] = {}
@@ -98,13 +110,16 @@ class ExportService:
         title = report_data.get("title", "Untitled Report")
         report_type = report_data.get("report_type", "project")
         created_at = report_data.get("created_at", "")
+        safe_title = escape(str(title))
+        safe_report_type = escape(str(report_type).title())
+        safe_created_at = escape(str(created_at))
         
         html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title}</title>
+    <title>{safe_title}</title>
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
@@ -153,8 +168,8 @@ class ExportService:
     </style>
 </head>
 <body>
-    <h1>{title}</h1>
-    <p class="meta">Report Type: {report_type.title()} | Created: {created_at}</p>
+    <h1>{safe_title}</h1>
+    <p class="meta">Report Type: {safe_report_type} | Created: {safe_created_at}</p>
 """
         
         if report_type == "project":
@@ -178,10 +193,10 @@ class ExportService:
                         # Split by newlines in case the draft has multiple paragraphs
                         for p in draft_text.split('\n\n'):
                             if p.strip():
-                                html += f"        <p>{p.strip()}</p>\n"
+                                html += f"        <p>{escape(p.strip())}</p>\n"
                     else:
                         for text in selected_texts:
-                            html += f"        <p>{text}</p>\n"
+                            html += f"        <p>{escape(str(text))}</p>\n"
                     html += "    </div>\n"
         
         elif report_type == "timeline":
@@ -195,11 +210,11 @@ class ExportService:
                 if draft_text:
                     for p in draft_text.split('\n\n'):
                         if p.strip():
-                            html += f"        <p>{p.strip()}</p>\n"
+                            html += f"        <p>{escape(p.strip())}</p>\n"
                 else:
                     html += "        <ul>\n"
                     for entry in selected_texts:
-                        html += f"            <li>{entry}</li>\n"
+                        html += f"            <li>{escape(str(entry))}</li>\n"
                     html += "        </ul>\n"
                 html += "    </div>\n"
         
@@ -211,8 +226,8 @@ class ExportService:
             for ref in numeric_refs:
                 html += "        <div class='reference-item'>\n"
                 html += (
-                    f"            <strong>[{ref.get('id')}] {ref.get('type', 'source')}</strong>: "
-                    f"{ref.get('value', 'Unknown Source')}<br>\n"
+                    f"            <strong>[{ref.get('id')}] {escape(str(ref.get('type', 'source')))}</strong>: "
+                    f"{escape(str(ref.get('value', 'Unknown Source')))}<br>\n"
                 )
                 html += "        </div>\n"
 
@@ -226,13 +241,13 @@ class ExportService:
                 citations = ref.get("mentions", [])
                 
                 html += f"        <div class='reference-item'>\n"
-                html += f"            <strong>{ref_type}</strong>: {ref_value}<br>\n"
+                html += f"            <strong>{escape(str(ref_type))}</strong>: {escape(str(ref_value))}<br>\n"
                 
                 for citation in citations:
                     citation_text = citation.get("text", "")
                     if citation_text:
                         display_text = citation_text[:100] + "..." if len(citation_text) > 100 else citation_text
-                        html += f"            <span class='citation'>\"{display_text}\"</span><br>\n"
+                        html += f"            <span class='citation'>\"{escape(str(display_text))}\"</span><br>\n"
                 
                 html += "        </div>\n"
             
@@ -252,11 +267,13 @@ class ExportService:
             
             result = BytesIO()
             pisa_status = pisa.CreatePDF(
-                html_content, dest=result
+                html_content,
+                dest=result,
+                encoding="utf-8",
             )
             
             if pisa_status.err:
-                raise Exception("PDF generation failed with errors")
+                raise Exception(f"PDF generation failed with {pisa_status.err} parsing/rendering error(s)")
                 
             return result.getvalue()
         except Exception as e:
