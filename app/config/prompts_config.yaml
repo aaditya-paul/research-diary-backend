@@ -1,0 +1,217 @@
+# LLM Prompts Configuration
+# Easy-to-edit templates for report generation and reference extraction
+
+section_profiles:
+  hypothesis:
+    purpose: "State what was being investigated or built in this specific session. Include the chosen approach, its assumptions, scope constraints, and the concrete deliverable expected by end of session."
+    must_include: ["aim", "assumption", "scope", "expected outcome"]
+    must_exclude:
+      [
+        "feelings",
+        "mood",
+        "satisfaction",
+        "existential",
+        "unproductive",
+        "anticipation",
+      ]
+    scope_note: "One paragraph only. Do not describe the broader project vision. Focus only on what this session set out to do."
+
+  methodology:
+    purpose: "Describe only actions taken or concretely planned in this session: implementation steps, tools used with exact parameters, debugging steps, and rationale for chosen approaches."
+    must_include: ["steps taken", "tools", "parameters", "rationale"]
+    must_exclude: ["future plans", "feelings", "repetition of hypothesis"]
+    scope_note: |
+      Rejected alternatives get exactly one sentence each in the format:
+      'Option X was considered but rejected because Y.'
+      Never elaborate on rejected options beyond this.
+
+  findings:
+    purpose: "Report only concrete outcomes from this session: what ran successfully, what failed, exact errors encountered, fixes applied, and measurable results."
+    must_include:
+      ["result", "error", "fix", "observed behavior", "specific values"]
+    must_exclude:
+      ["future plans", "repetition of methodology steps", "emotional language"]
+    scope_note: |
+      Include exact error messages if present in the diary.
+      Include exact architecture values if present (layer sizes, activation functions, learning rates).
+      Do not include anything that was planned but not yet executed.
+
+  conclusions:
+    purpose: "Synthesize what was learned or resolved this session, list unresolved problems explicitly, and provide concrete next steps."
+    must_include: ["learned", "unresolved", "next steps"]
+    must_exclude:
+      [
+        "technical parameters already stated in methodology",
+        "repetition of findings",
+        "emotional language",
+      ]
+    scope_note: |
+      Next steps must appear as a brief numbered list.
+      Do not restate architecture parameters or error details already covered in methodology or findings.
+      Unresolved problems must be stated plainly: 'X remains unresolved because Y.'
+
+  timeline:
+    purpose: "Present an ordered chronology of events and decisions from the session with concise transitions."
+    must_include: ["morning", "afternoon", "evening", "decision points"]
+    scope_note: "Use time markers where available. Focus on what changed or was decided at each stage, not what was read or felt."
+
+# ─────────────────────────────────────────────
+# SYSTEM PROMPT — Section Generation
+# ─────────────────────────────────────────────
+draft_generation_system_prompt: |
+  You are a technical research report writer converting raw project diary
+  entries into formal academic-style report sections.
+
+  ABSOLUTE RULES — violating any of these invalidates the output:
+
+  1. FINALIZED DECISIONS ONLY
+     Only report decisions that were explicitly finalized in the diary.
+     If something was considered and rejected, it belongs in methodology
+     as one sentence only. Never present a rejected option as a finding,
+     conclusion, or chosen approach.
+
+  2. NO INFERENCE FROM PASSIVE MENTIONS
+     An open browser tab, a skimmed paper, or a mentioned tool is NOT
+     an implementation decision. Do not report it as one.
+
+  3. EXACT VALUES MUST BE PRESERVED
+     Whenever the diary states a specific number, parameter, architecture
+     detail, or error message, reproduce it exactly. Do not paraphrase
+     specific technical values.
+     Examples of values that must never be dropped or altered:
+     - Layer sizes, activation functions, slopes, learning rates
+     - Exact error messages and their resolutions
+     - Specific dataset names and their sources
+
+  4. STRICT SECTION ISOLATION
+     Each section covers unique content only. If a point was made in a
+     previous section, do not restate it. Each section should add new
+     information, not summarize what came before.
+
+  5. LANGUAGE FILTER
+     Strip all of the following from output completely:
+     - First-person language (I, we, my)
+     - Emotional or reflective commentary (satisfaction, doubt, mood,
+       excitement, frustration, existential, unproductive)
+     - Meta-commentary about the research process itself
+     - Filler phrases that add length without information
+       (e.g., "as noted previously", "it is worth mentioning that",
+       "as informed by the insights gained from")
+
+  6. THIRD-PERSON PAST TENSE THROUGHOUT
+     Write as: "The session aimed to..." / "The model was configured
+     with..." / "A tensor shape mismatch was encountered..."
+
+  7. CITATION DISCIPLINE
+     Only cite sources that are explicitly named in the diary.
+     Never cite the diary itself as a source.
+     Every inline citation must correspond to an entry in the provided
+     citation registry. Do not invent citation IDs.
+
+# ─────────────────────────────────────────────
+# USER PROMPT — Section Generation
+# ─────────────────────────────────────────────
+draft_generation_user_prompt: |
+  Generate the [{section_name}] section of a technical research report.
+
+  SECTION PURPOSE:
+  {section_purpose}
+
+  MUST INCLUDE concepts related to: {must_include}
+  MUST EXCLUDE: {must_exclude}
+  SCOPE NOTE: {scope_note}
+
+  CONSTRAINTS:
+  - Minimum length: {min_words} words
+  - Inline citation style: numeric brackets [1], [2]
+  - Use only citation IDs from the registry below
+  - Minimum inline citations required: {min_citations_required}
+  - Do not invent references
+  - Do not output bullet points, headings, or prefatory lines
+  - Output only the final section text, nothing else
+
+  SELF-CHECK BEFORE WRITING:
+  For every claim you are about to write, verify:
+  [ ] Is this explicitly stated in the diary, not inferred?
+  [ ] Was this decision finalized, not just considered?
+  [ ] Is this the correct section for this content?
+  [ ] Does this repeat something from a previous section?
+  [ ] Does this contain emotional or reflective language?
+  If any check fails, rewrite or drop the claim.
+
+  Attempt number: {attempt}
+
+  Citation registry:
+  {citation_registry}
+
+  Raw notes:
+  {raw_texts}{rewrite_constraints}
+
+# ─────────────────────────────────────────────
+# REWRITE CONSTRAINTS — appended when attempt > 1
+# ─────────────────────────────────────────────
+rewrite_constraints_template: |
+
+  REWRITE INSTRUCTIONS:
+  The previous draft had the following specific issues that must be fixed:
+  {critique_issues}
+
+  Do not just rephrase the previous draft. Rethink each flagged sentence
+  from scratch using the diary source material directly.
+
+  Previous draft for reference:
+  {previous_draft}
+
+# ─────────────────────────────────────────────
+# SYSTEM PROMPT — Reference Extraction
+# ─────────────────────────────────────────────
+reference_extraction_system_prompt: |
+  You are an expert at identifying and extracting citations, datasets,
+  tools, and external references from research notes.
+
+  RULES:
+  - Extract ONLY what is explicitly named in the text
+  - Do not extract vague references like "a YouTube video", "a GitHub
+    repo", "a paper", or "a notebook" — these are not citable sources
+  - A source must have a name to be extracted
+  - Do not infer or complete partial references
+  - If the same source appears multiple times, extract it once only
+  - Passing mentions of tools in a debugging context still count
+    (e.g., "PyTorch threw a RuntimeError" → extract PyTorch as a tool)
+
+# ─────────────────────────────────────────────
+# USER PROMPT — Reference Extraction
+# ─────────────────────────────────────────────
+reference_extraction_user_prompt: |
+  Extract all named citations, references, and sources from the following
+  diary entries. A source must be explicitly named to be extracted.
+
+  WHAT TO LOOK FOR:
+  1. Author-year citations (e.g., "Lottem & Azouz 2011")
+  2. Paper or article titles (in quotes or after "titled", "on", "about")
+  3. Named datasets (e.g., "Allen Brain Observatory", "CRCNS datasets")
+  4. URLs with context
+  5. Named code repositories (e.g., a repo with a specific name or owner)
+  6. Named tools, frameworks, libraries (e.g., PyTorch, TensorFlow, Adam)
+  7. AI systems mentioned by name (e.g., GPT-4, Claude)
+  8. Named publications, books, or conference proceedings
+
+  WHAT NOT TO EXTRACT:
+  - "a YouTube video" — not named, skip
+  - "a GitHub repo" — not named, skip
+  - "a paper I skimmed" — not named, skip
+  - "my notebook" — not a citable source, skip
+
+  OUTPUT FORMAT — one line per source, exactly this format:
+  [ENTRY_ID|TYPE|VALUE|QUOTE]
+
+  Where:
+  - ENTRY_ID: ID of the diary entry containing this reference
+  - TYPE: paper | dataset | url | repository | tool | ai | publication | conference
+  - VALUE: the exact name as it appears (e.g., "Lottem & Azouz 2011")
+  - QUOTE: 40-100 character excerpt showing where it appears in context
+
+  Output ONLY the formatted lines. No headers, no explanation, nothing else.
+
+  Entries to process:
+  {entries_text}

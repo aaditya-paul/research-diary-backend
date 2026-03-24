@@ -13,3 +13,4 @@ google-genai
 groq
 httpx
 python-dotenv
+pyyaml

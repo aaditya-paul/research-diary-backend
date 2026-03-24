@@ -1,12 +1,19 @@
 import re
 import os
 import asyncio
+import yaml
+import logging
+import time
 from typing import List, Dict, Any
 from collections import defaultdict
+from pathlib import Path
 import html2text
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 try:
     from google import genai
@@ -19,16 +26,38 @@ except ImportError:
 
 class ReferenceExtractor:
     def __init__(self):
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        logger.info("=" * 70)
+        logger.info("Initializing Reference Extractor")
+        logger.info("=" * 70)
         
+        # ========== API Key Configuration ==========
+        # Primary: NVIDIA NIM for Qwen 3.5-122B
+        self.nvidia_nim_api_key = os.getenv("NVIDIA_NIM_API_KEY")
+        self.nvidia_nim_base_url = os.getenv("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+        self.nvidia_nim_model = os.getenv("NVIDIA_NIM_MODEL", "qwen/qwen3.5-122b-a10b")
+        self.nvidia_nim_enable_thinking = os.getenv("NVIDIA_NIM_ENABLE_THINKING", "true").lower() == "true"
+        
+        # Fallback: Google Gemini
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.gemini_client = None
         if self.gemini_api_key and LLMS_AVAILABLE:
             self.gemini_client = genai.Client(api_key=self.gemini_api_key)
         
-        self.use_llm = LLMS_AVAILABLE and (self.gemini_api_key or self.groq_api_key)
+        # Fallback: Groq
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        
+        # Fallback: Ollama
+        self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        
+        # Check if LLM is available
+        self.use_llm = LLMS_AVAILABLE and (self.nvidia_nim_api_key or self.gemini_api_key or self.groq_api_key)
+        
+        # Load prompts from configuration
+        self._load_extraction_prompts()
+        
+        # Log provider configuration
+        self._log_reference_extraction_config()
         
         # Fallback patterns (used only if LLM is unavailable)
         self.url_pattern = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+', re.IGNORECASE)
@@ -55,6 +84,97 @@ class ReferenceExtractor:
             'the paper', 'the book', 'the article', 'the source', 'mentioned',
             'stated that', 'claims that', 'says that'
         ]
+    
+    def _log_reference_extraction_config(self):
+        """Log which LLM providers are available for reference extraction."""
+        logger.info("\nReference Extraction Provider Configuration:")
+        logger.info("-" * 70)
+        
+        if not self.use_llm:
+            logger.info("✗ LLM providers not available - will use regex fallback")
+            logger.info("-" * 70)
+            logger.info("=" * 70 + "\n")
+            return
+        
+        # Check NVIDIA NIM
+        if self.nvidia_nim_api_key:
+            logger.info(f"✓ [PRIMARY] NVIDIA NIM (Qwen 3.5-122B)")
+            logger.info(f"  Model: {self.nvidia_nim_model}")
+            logger.info(f"  URL: {self.nvidia_nim_base_url}")
+        else:
+            logger.info("✗ NVIDIA NIM: Not configured")
+        
+        # Check Gemini
+        if self.gemini_client:
+            logger.info(f"✓ [FALLBACK 1] Google Gemini")
+            logger.info(f"  Model: gemini-2.5-flash")
+        else:
+            logger.info("✗ Gemini: Not configured")
+        
+        # Check Groq
+        if self.groq_api_key:
+            logger.info(f"✓ [FALLBACK 2] Groq")
+            logger.info(f"  Model: llama-3.3-70b-versatile")
+        else:
+            logger.info("✗ Groq: Not configured")
+        
+        # Ollama (always available as fallback)
+        logger.info(f"✓ [FALLBACK 3] Local Ollama")
+        logger.info(f"  Model: {self.ollama_model}")
+        logger.info(f"  URL: {self.ollama_url}")
+        
+        logger.info("-" * 70)
+        logger.info("Provider fallback chain: NVIDIA Qwen → Gemini → Groq → Ollama → Regex")
+        logger.info("=" * 70 + "\n")
+    
+    def _load_extraction_prompts(self):
+        """Load reference extraction prompts from external configuration."""
+        config_path = Path(__file__).parent.parent / "config" / "prompts_config.yaml"
+        
+        try:
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f)
+            
+            # Load reference extraction prompts from config
+            self.extraction_system_prompt = config.get("reference_extraction_system_prompt", "").strip()
+            self.extraction_user_prompt_template = config.get("reference_extraction_user_prompt", "").strip()
+            
+            print(f"✓ Loaded reference extraction prompts from {config_path}")
+        except FileNotFoundError:
+            print(f"⚠ Prompts config not found at {config_path}, using defaults")
+            self._set_default_extraction_prompts()
+        except Exception as e:
+            print(f"⚠ Error loading extraction prompts: {e}, using defaults")
+            self._set_default_extraction_prompts()
+    
+    def _set_default_extraction_prompts(self):
+        """Set default extraction prompts if config not available."""
+        self.extraction_system_prompt = (
+            "You are an expert at identifying and extracting academic citations, datasets, tools, "
+            "and external references from research notes. Be precise and extract ONLY what is explicitly mentioned in the text."
+        )
+        self.extraction_user_prompt_template = (
+            "Extract all citations, references, sources, and academic/technical mentions from the following diary entries.\n"
+            "Look for:\n"
+            "1. Author-year citations (e.g., 'Smith, 2021' or 'Smith & Jones 2020')\n"
+            "2. Paper/article titles (especially in quotes or after 'titled', 'on', 'about')\n"
+            "3. Dataset names (e.g., 'Allen Brain Observatory', 'CRCNS datasets')\n"
+            "4. URLs and their context\n"
+            "5. Code repositories and project names (e.g., GitHub repos)\n"
+            "6. Tools, frameworks, libraries mentioned (e.g., 'PyTorch', 'TensorFlow')\n"
+            "7. AI systems mentioned (ChatGPT, Claude, etc.)\n"
+            "8. Any book or publication names\n\n"
+            "For each reference found, output ONLY in this exact format (one per line):\n"
+            "[ENTRY_ID|TYPE|VALUE|QUOTE]\n\n"
+            "Where:\n"
+            "- ENTRY_ID: the ID of the entry\n"
+            "- TYPE: one of: paper, dataset, url, repository, tool, ai, publication, conference\n"
+            "- VALUE: the reference name or citation (e.g., 'Lottem & Azouz 2011', 'Allen Brain Observatory')\n"
+            "- QUOTE: a short quote or context where this reference appears (40-100 chars)\n\n"
+            "Do not include made-up references. Only extract what is explicitly mentioned.\n"
+            "Output ONLY the [ENTRY_ID|TYPE|VALUE|QUOTE] lines, nothing else.\n\n"
+            "Entries to process:\n{entries_text}"
+        )
 
     def _html_to_text(self, html_content: str) -> str:
         converter = html2text.HTML2Text()
@@ -116,60 +236,134 @@ class ReferenceExtractor:
         for item in texts_with_ids:
             entries_str += f"\n[Entry ID: {item['id']}]\n{item['text']}\n"
         
-        return (
-            "Extract all citations, references, sources, and academic/technical mentions from the following diary entries. "
-            "Look for:\n"
-            "1. Author-year citations (e.g., 'Smith, 2021' or 'Smith & Jones 2020')\n"
-            "2. Paper/article titles (especially in quotes or after 'titled', 'on', 'about')\n"
-            "3. Dataset names (e.g., 'Allen Brain Observatory', 'CRCNS datasets')\n"
-            "4. URLs and their context\n"
-            "5. Code repositories and project names (e.g., GitHub repos)\n"
-            "6. Tools, frameworks, libraries mentioned (e.g., 'PyTorch', 'TensorFlow')\n"
-            "7. AI systems mentioned (ChatGPT, Claude, etc.)\n"
-            "8. Any book or publication names\n\n"
-            "For each reference found, output ONLY in this exact format (one per line):\n"
-            "[ENTRY_ID|TYPE|VALUE|QUOTE]\n\n"
-            "Where:\n"
-            "- ENTRY_ID: the ID of the entry\n"
-            "- TYPE: one of: paper, dataset, url, repository, tool, ai, publication, conference\n"
-            "- VALUE: the reference name or citation (e.g., 'Lottem & Azouz 2011', 'Allen Brain Observatory')\n"
-            "- QUOTE: a short quote or context where this reference appears (40-100 chars)\n\n"
-            "Do not include made-up references. Only extract what is explicitly mentioned.\n"
-            "Output ONLY the [ENTRY_ID|TYPE|VALUE|QUOTE] lines, nothing else.\n\n"
-            "Entries to process:" + entries_str
-        )
+        # Use the externalized prompt template from configuration
+        user_prompt = self.extraction_user_prompt_template.format(entries_text=entries_str)
+        # Return combined system + user prompt
+        return f"{self.extraction_system_prompt}\n\n{user_prompt}"
 
     def _call_llm_for_extraction(self, prompt: str) -> str:
         """Call LLM with fallback support."""
-        # Try Gemini
+        # ========== PROVIDER FALLBACK CHAIN ==========
+        logger.info("Starting reference extraction using LLM")
+        
+        # 1. NVIDIA Qwen 3.5-122B (Primary)
+        if self.nvidia_nim_api_key:
+            logger.info("→ Attempting NVIDIA NIM (Qwen 3.5-122B) [PRIMARY] for reference extraction")
+            result = self._call_nvidia_nim_for_extraction(prompt)
+            if result:
+                logger.info("✓ SUCCESS: NVIDIA NIM extracted references")
+                return result
+            logger.warning("✗ NVIDIA NIM failed, trying next provider...")
+        
+        # 2. Google Gemini (Fallback)
         if self.gemini_client:
-            try:
-                response = self.gemini_client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=genai.types.GenerateContentConfig(temperature=0.3),
-                )
-                if response.text:
-                    return response.text.strip()
-            except Exception as e:
-                print(f"Gemini reference extraction failed: {e}")
+            logger.info("→ Attempting Google Gemini (gemini-2.5-flash) [FALLBACK 1] for reference extraction")
+            result = self._call_gemini_for_extraction(prompt)
+            if result:
+                logger.info("✓ SUCCESS: Gemini extracted references")
+                return result
+            logger.warning("✗ Gemini failed, trying next provider...")
         
-        # Try Groq
+        # 3. Groq Llama (Fallback)
         if self.groq_api_key:
-            try:
-                client = Groq(api_key=self.groq_api_key)
-                response = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama3-8b-8192",
-                    temperature=0.3,
-                )
-                if response.choices:
-                    return response.choices[0].message.content.strip()
-            except Exception as e:
-                print(f"Groq reference extraction failed: {e}")
+            logger.info("→ Attempting Groq (llama-3.3-70b-versatile) [FALLBACK 2] for reference extraction")
+            result = self._call_groq_for_extraction(prompt)
+            if result:
+                logger.info("✓ SUCCESS: Groq extracted references")
+                return result
+            logger.warning("✗ Groq failed, trying next provider...")
         
-        # Try Ollama (without async since this is called from sync context)
+        # 4. Local Ollama (Final Fallback)
+        logger.info(f"→ Attempting Local Ollama ({self.ollama_model}) [FALLBACK 3] for reference extraction")
+        result = self._call_ollama_for_extraction(prompt)
+        if result:
+            logger.info(f"✓ SUCCESS: Ollama ({self.ollama_model}) extracted references")
+            return result
+        
+        logger.warning("✗ ALL LLM PROVIDERS FAILED - falling back to regex extraction")
+        return ""
+    
+    def _call_nvidia_nim_for_extraction(self, prompt: str) -> str:
+        """Call NVIDIA NIM API for Qwen 3.5-122B reference extraction with extended parameters."""
         try:
+            start_time = time.time()
+            url = f"{self.nvidia_nim_base_url}/chat/completions"
+            payload = {
+                "model": self.nvidia_nim_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 16384,
+                "temperature": 0.3,
+                "top_p": 0.95,
+                "stream": False,
+                "chat_template_kwargs": {"enable_thinking": self.nvidia_nim_enable_thinking},
+            }
+            response = httpx.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self.nvidia_nim_api_key[:20]}...",  # Log partial key for security
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=60.0,
+            )
+            
+            if response.status_code != 200:
+                logger.debug(f"NVIDIA NIM HTTP {response.status_code} from {url} with model '{self.nvidia_nim_model}'")
+                response.raise_for_status()
+            
+            data = response.json()
+            if data.get("choices") and len(data["choices"]) > 0:
+                content = data["choices"][0].get("message", {}).get("content", "").strip()
+                if content:
+                    elapsed = time.time() - start_time
+                    logger.debug(f"NVIDIA NIM (Qwen 3.5) reference extraction returned {len(content)} chars in {elapsed:.2f}s (enable_thinking={self.nvidia_nim_enable_thinking})")
+                    return content
+        except Exception as e:
+            logger.debug(f"NVIDIA NIM (Qwen 3.5) reference extraction error: {type(e).__name__}: {str(e)[:100]}")
+        return ""
+    
+    def _call_gemini_for_extraction(self, prompt: str) -> str:
+        """Call Gemini API for reference extraction."""
+        try:
+            start_time = time.time()
+            response = self.gemini_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(temperature=0.3),
+            )
+            if response.text:
+                content = response.text.strip()
+                elapsed = time.time() - start_time
+                logger.debug(f"Gemini (gemini-2.5-flash) reference extraction returned {len(content)} chars in {elapsed:.2f}s")
+                return content
+        except Exception as e:
+            logger.debug(f"Gemini (gemini-2.5-flash) reference extraction error: {type(e).__name__}: {str(e)[:100]}")
+        return ""
+    
+    def _call_groq_for_extraction(self, prompt: str) -> str:
+        """Call Groq API for reference extraction."""
+        try:
+            start_time = time.time()
+            client = Groq(api_key=self.groq_api_key)
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+            )
+            if response.choices:
+                content = response.choices[0].message.content.strip()
+                elapsed = time.time() - start_time
+                logger.debug(f"Groq (llama-3.3-70b-versatile) reference extraction returned {len(content)} chars in {elapsed:.2f}s")
+                return content
+        except Exception as e:
+            logger.debug(f"Groq (llama-3.3-70b-versatile) reference extraction error: {type(e).__name__}: {str(e)[:100]}")
+        return ""
+    
+    
+    def _call_ollama_for_extraction(self, prompt: str) -> str:
+        """Call Ollama API for reference extraction."""
+        try:
+            start_time = time.time()
             response = httpx.post(
                 self.ollama_url,
                 json={
@@ -181,10 +375,12 @@ class ReferenceExtractor:
                 timeout=30.0,
             )
             if response.json().get("response"):
-                return response.json()["response"].strip()
+                content = response.json()["response"].strip()
+                elapsed = time.time() - start_time
+                logger.debug(f"Ollama ({self.ollama_model}) reference extraction returned {len(content)} chars in {elapsed:.2f}s")
+                return content
         except Exception as e:
-            print(f"Ollama reference extraction failed: {e}")
-        
+            logger.debug(f"Ollama ({self.ollama_model}) reference extraction error: {type(e).__name__}: {str(e)[:100]}")
         return ""
 
     def _parse_llm_extraction(
