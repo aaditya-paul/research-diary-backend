@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+chromadb
+sentence-transformers
+pydantic
+pydantic-settings
+python-multipart
+html2text
+weasyprint
+jinja2
